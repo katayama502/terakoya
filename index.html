@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>高校生向け・ハッキング体験ラボ（学習用）</title>
+<style>
+  :root{
+    --bg:#0f1222;--card:#151a2f;--ink:#eef1ff;--sub:#a9add6;--ok:#1dd18c;--warn:#ffb02e;--bad:#ff5f7a;--acc:#7aa2ff
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:linear-gradient(180deg,#0d1020,#0e1530 45%,#0b1020);color:var(--ink);font-family:system-ui,-apple-system,Segoe UI,Roboto,"Noto Sans JP",sans-serif}
+  header{padding:28px 16px;text-align:center;border-bottom:1px solid #243055}
+  header h1{margin:0 0 6px;font-size:28px}
+  header p{margin:0;color:var(--sub)}
+  main{max-width:1100px;margin:20px auto;padding:0 14px;display:grid;gap:12px}
+  .row{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+  input,select,textarea,button{border-radius:12px;border:1px solid #2a355d;background:#0f1430;color:var(--ink)}
+  input,select,button{padding:10px 12px}
+  textarea{padding:10px 12px;min-height:90px;width:100%}
+  button{cursor:pointer;font-weight:600}
+  .btn{background:#1b2a62;border-color:#27428f}
+  .btn-ghost{background:transparent}
+  .btn-good{background:#183022;border-color:#245c3f}
+  .btn-bad{background:#2a1520;border-color:#4b293b}
+  .pill{display:inline-flex;align-items:center;gap:6px;border:1px solid #2a355d;padding:2px 8px;border-radius:999px}
+  .ok{color:var(--ok)} .bad{color:var(--bad)} .sub{color:var(--sub)}
+  .card{background:var(--card);border:1px solid #223059;border-radius:16px;overflow:hidden}
+  .card>header{display:flex;justify-content:space-between;align-items:center;background:#131939;padding:12px 14px;border-bottom:1px solid #223059}
+  .card>header h2{margin:0;font-size:18px}
+  .body{padding:14px;display:grid;gap:10px}
+  .out{background:#0b0f24;border:1px dashed #2a355d;border-radius:12px;padding:10px;min-height:44px}
+  .code{font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;background:#0b0f24;border:1px solid #2a355d;border-radius:12px;padding:10px;overflow:auto}
+  details summary{cursor:pointer;user-select:none}
+  footer{padding:24px;text-align:center;color:var(--sub)}
+  .cols{display:grid;grid-template-columns:1.2fr .8fr;gap:12px}
+  @media (max-width:900px){.cols{grid-template-columns:1fr}}
+  .hudbar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;justify-content:center;margin-top:10px}
+  .sep{border:none;border-top:1px solid #23325e;margin:4px 0}
+</style>
+</head>
+<body>
+<header>
+  <h1>🔐 高校生向け・ハッキング体験ラボ</h1>
+  <p>“擬似サイト”で10種の脆弱性を安全に攻略。ヒント→実践→自動判定で学べます。</p>
+  <p class="sub" style="font-size:12px">※ この教材は<strong>学習専用</strong>です。実サービスに対する攻撃行為は絶対に行わないこと。</p>
+</header>
+
+<main id="app"></main>
+
+<footer>© エシカルハッキング学習用 | バージョン: classroom-missions (no-score)</footer>
+
+<script>
+/* ========= ユーティリティ ========= */
+const $ = s => document.querySelector(s);
+const el = (tag, attrs={}, children=[])=>{
+  const n=document.createElement(tag);
+  for(const[k,v] of Object.entries(attrs)){
+    if(k==='class') n.className=v;
+    else if(k.startsWith('on') && typeof v==='function') n.addEventListener(k.slice(2),v);
+    else n.setAttribute(k,v);
+  }
+  (Array.isArray(children)?children:[children]).forEach(c=>n.append(c instanceof Node?c:document.createTextNode(c)));
+  return n;
+};
+const sanitize = (s)=>{const d=document.createElement('div'); d.innerText=s; return d.innerHTML;};
+const storage = {
+  get(k,def){ try{ return JSON.parse(localStorage.getItem(k)) ?? def }catch{ return def } },
+  set(k,v){ try{ localStorage.setItem(k,JSON.stringify(v)) }catch{} }
+};
+const rand = () => Math.random().toString(36).slice(2);
+
+/* ========= プレイヤー / 進捗のみ（スコアなし） ========= */
+const LAB_KEY = "hs_lab_progress_v1_noscore";
+const state = storage.get(LAB_KEY, {
+  player: null,         // {name, id}
+  solved: {},           // {missionId: true}
+  startedAt: Date.now()
+});
+function save(){ storage.set(LAB_KEY, state); }
+function ensurePlayerUI(container){
+  const row = el('div',{class:'row'},[
+    el('input',{id:'playerName',placeholder:'ニックネーム（例: たろう）',value:state.player?.name||''}),
+    el('button',{class:'btn',onclick:()=>{
+      const name = $('#playerName').value.trim().slice(0,20)||`player_${rand().slice(0,4)}`;
+      state.player = {name, id: state.player?.id || rand()};
+      save(); renderHud();
+    }},["参加 / 更新"]),
+    el('button',{class:'btn-ghost',onclick:()=>{localStorage.removeItem(LAB_KEY); location.reload();}},["リセット"])
+  ]);
+  container.append(row);
+}
+function markSolved(id){
+  if(!state.solved[id]){
+    state.solved[id]=true;
+    save();
+    renderHud();
+    const tag = document.querySelector(`#m${id} header .sub`);
+    if(tag) tag.textContent = "✅ クリア済";
+  }
+}
+function renderHud(){
+  const hud = $("#hud");
+  if(!hud) return;
+  hud.innerHTML="";
+  const total = 10;
+  const solvedCount = Object.keys(state.solved).length;
+  hud.append(
+    el('div',{class:'hudbar'},[
+      el('span',{class:'pill'},["👤 ", state.player?.name || "未参加"]),
+      el('span',{class:'pill'},[`✅ クリア: ${solvedCount}/${total}`]),
+      el('button',{class:'btn-ghost',onclick:()=>alert(
+        "遊び方：\n1) 目的を読んで“擬似サイト”を操作\n2) 条件を満たすと自動でクリア（バッジ表示）\n3) ヒントは段階式（減点要素なし）"
+      )},["ℹ️ 遊び方"])
+    ])
+  );
+}
+
+/* ========= 共通: ミッションカード（点数表示なし） ========= */
+function missionCard(id, title, build){
+  const card = el('section',{class:'card', id:`m${id}`},[
+    el('header',{},[
+      el('h2',{},[`${id}. ${title}`]),
+      el('div',{},[
+        el('span',{class:'pill sub'},[ state.solved[id] ? "✅ クリア済" : "未クリア" ])
+      ])
+    ]),
+    el('div',{class:'body'})
+  ]);
+  build(card.querySelector('.body'), ()=>markSolved(id));
+  return card;
+}
+
+/* ========= 各ミッション ========= */
+const app = $("#app");
+
+/* HUD + 参加 */
+app.append(el('section',{class:'card'},[
+  el('header',{},[ el('h2',{},["⚙️ 参加設定・進捗"]), el('span',{id:'hud'}) ]),
+  el('div',{class:'body'},[
+    (()=>{
+      const c = el('div',{}); ensurePlayerUI(c); return c;
+    })()
+  ])
+]));
+renderHud();
+
+/* M1: Reflected XSS を起こせ（アラートを出す） */
+app.append(missionCard(1,"Reflected XSS：アラートを出そう",(body, solved)=>{
+  const input = el('input',{placeholder:"例:"});
+  const show  = el('button',{class:'btn'},["表示"]);
+  const out   = el('div',{class:'out'},"ここに表示されます");
+  show.onclick = ()=>{
+    out.innerHTML = "あなたの入力: " + input.value; // わざと脆弱
+    if(out.querySelector("script")) { solved(); alert("🎉 ミッションクリア！（反射XSS）"); }
+  };
+  body.append(
+    el('p',{},["目的：入力をそのまま表示する欄で、スクリプトを実行させる。"]),
+    el('div',{class:'row'},[input,show]),
+    out,
+    el('details',{},[
+      el('summary',{},["ヒント"]),
+      el('div',{},[
+        el('br'), "ヒント：img の onerror などでも可能（例：", el('span',{class:'code'},["<img src=x >"]), "）。"
+      ])
+    ])
+  );
+}));
+
+/* M2: Stored XSS を発生させる（擬似DB: localStorage） */
+app.append(missionCard(2,"Stored XSS：保存した投稿で実行",(body, solved)=>{
+  const ta = el('textarea',{placeholder:"コメントを投稿（例: <img src=x onerror=alert('hi')>）"});
+  const saveBtn = el('button',{class:'btn'},["投稿"]);
+  const list = el('div',{class:'out'});
+  function render(){
+    const items = storage.get("m2_comments",[]);
+    list.innerHTML="";
+    items.forEach(html=>{
+      const item = el('div',{class:'code'});
+      item.innerHTML = html; // わざと脆弱
+      list.append(item);
+      if(item.querySelector("script") || item.querySelector("[onerror],[onload]")){
+        solved();
+      }
+    });
+  }
+  saveBtn.onclick = ()=>{
+    const items = storage.get("m2_comments",[]);
+    items.push(ta.value);
+    storage.set("m2_comments",items);
+    ta.value=''; render();
+  };
+  body.append(
+    el('p',{},["目的：保存済みの投稿を表示したときにスクリプトが動けば成功。"]),
+    ta, el('div',{class:'row'},[saveBtn, el('button',{class:'btn-ghost',onclick:()=>{localStorage.removeItem("m2_comments"); render();}},["全削除"])]),
+    list,
+    el('details',{},[
+      el('summary',{},["ヒント"]),
+      "ヒント：img のエラー時ハンドラ（onerror）に注目。"
+    ])
+  ); render();
+}));
+
+/* M3: DOM XSS（URLハッシュ # 由来） */
+app.append(missionCard(3,"DOM XSS：URLハッシュで改ざん",(body, solved)=>{
+  const out = el('div',{class:'out'},"URLの # 以降がそのままここに表示されます。");
+  async function copySample() {
+    const sample = location.origin + location.pathname + "#<img src=x onerror=alert('dom')>";
+    try {
+      await navigator.clipboard.writeText(sample);
+      alert("サンプルURLをコピーしました。ブラウザのアドレス欄に貼ってアクセスしてみよう。");
+    } catch {
+      prompt("このURLをコピーして使ってください👇", sample);
+    }
+  }
+  function apply(){
+    const raw = decodeURIComponent(location.hash.slice(1));
+    out.innerHTML = raw || "（ハッシュなし）"; // わざと脆弱
+    if(out.querySelector("script") || out.querySelector("[onerror],[onload]")) solved();
+  }
+  const copyLink = el('button',{class:'btn-ghost',onclick:copySample},["サンプルURLをコピー"]);
+  window.addEventListener('hashchange',apply);
+  body.append(el('p',{},["目的：# の後ろにペイロードを入れて遷移し、表示領域でスクリプト実行を狙う。"]), copyLink, out);
+  apply();
+}));
+
+/* M4: HTMLインジェクション（見出しを勝手に追加） */
+app.append(missionCard(4,"HTMLインジェクション：UI改ざん",(body, solved)=>{
+  const input = el('input',{placeholder:"例: <h3 style='color:gold'>勝手な見出し</h3>"});
+  const prev = el('button',{class:'btn'},["プレビュー"]);
+  const area = el('div',{class:'out'});
+  prev.onclick = ()=>{
+    area.innerHTML = input.value; // わざと脆弱
+    if(area.querySelector("h1,h2,h3,h4,h5,h6")) solved();
+  };
+  body.append(
+    el('p',{},["目的：任意の見出しやボタンを埋め込み、見た目を改ざんできたら成功。"]),
+    el('div',{class:'row'},[input,prev]),
+    area
+  );
+}));
+
+/* M5: SQL Injection（超簡易シミュレータ） */
+app.append(missionCard(5,"SQLi：' OR '1'='1 で全件取得",(body, solved)=>{
+  const users = [
+    {id:1, name:"Taro", username:"taro"},
+    {id:2, name:"Hanako", username:"hanako"},
+    {id:3, name:"Ichiro", username:"ichiro"}
+  ];
+  const q = el('input',{placeholder:"例: ' OR '1'='1"});
+  const btn = el('button',{class:'btn'},["検索"]);
+  const out = el('div',{class:'out'});
+  btn.onclick = ()=>{
+    const term = q.value;
+    // わざと脆弱：疑似SQL連結ロジック
+    const all = /'?\s*OR\s*'1'\s*=\s*'1/i.test(term);
+    const res = all ? users : users.filter(u=> (u.username+u.name).toLowerCase().includes(term.toLowerCase()));
+    out.innerHTML = res.map(u=>`<span class="pill">#${u.id} ${sanitize(u.name)} (@${sanitize(u.username)})</span>`).join(" ");
+    if(all) solved();
+  };
+  body.append(
+    el('p',{},["目的：条件を真にして全件が表示されるようにする。"]),
+    el('div',{class:'row'},[q,btn]), out,
+    el('details',{},[el('summary',{},["ヒント"]), "ヒント：", el('span',{class:'code'},["' OR '1'='1"])])
+  );
+}));
+
+/* M6: CSRF（トークンなし送金を成立させる） */
+app.append(missionCard(6,"CSRF：外部操作で送金",(body, solved)=>{
+  let balance = storage.get("m6_balance", 10000);
+  function saveBal(){ storage.set("m6_balance", balance); bal.textContent = `口座残高: ¥${balance.toLocaleString()}`; }
+  const bal = el('div',{class:'out'});
+  const normal = el('button',{class:'btn'},["正規：¥500 寄付"]);
+  const attacker = el('button',{class:'btn-bad'},["攻撃ページ：こっそり送金"]);
+  normal.onclick = ()=>{ balance -= 500; saveBal(); };
+  attacker.onclick = ()=>{ balance -= 500; saveBal(); solved(); alert("🎉 送金が実行されました（トークンなし）。"); };
+  body.append(el('p',{},["目的：ユーザーの意思に反して送金を成立させる（疑似動作）。"]), bal, el('div',{class:'row'},[normal,attacker]),
+    el('details',{},[el('summary',{},["ヒント"]), "ヒント：imgタグやリンク踏みなど、ユーザー操作に見せかけた自動送信を想像してみよう。"])
+  );
+  saveBal();
+}));
+
+/* M7: クリックジャッキング（透明UIで誤クリック） */
+app.append(missionCard(7,"クリックジャッキング：隠しボタンを押させる",(body, solved)=>{
+  const box = el('div',{class:'out',style:"position:relative;height:140px"});
+  const bait = el('button',{style:"position:absolute;left:12px;top:12px"},["見た目のボタン"]);
+  const hidden = el('button',{style:"position:absolute;left:48%;top:50%"},["（隠し）承認"]);
+  const overlay = el('a',{href:"#",style:"position:absolute;inset:0;opacity:.01"},["　"]); // ほぼ見えない
+  hidden.addEventListener('click',()=>{ solved(); alert("🎉 隠しボタンが押されました！"); });
+  box.append(bait, hidden, overlay);
+  body.append(
+    el('p',{},["目的：透明のレイヤー越しに、ユーザーに見えない操作をさせる仕組みを体験。"]),
+    box
+  );
+}));
+
+/* M8: オープンリダイレクト（任意URLへ遷移させる） */
+app.append(missionCard(8,"オープンリダイレクト：任意サイトへ飛ばす",(body, solved)=>{
+  const input = el('input',{placeholder:"例: https://example.org/phish"});
+  const go = el('button',{class:'btn'},["移動"]);
+  go.onclick = ()=>{
+    const u = input.value.trim();
+    if(!u) return;
+    // わざと脆弱：ホスト名の検証なし（実際の遷移は行わない）
+    try{ new URL(u); }catch{ return alert("URLが不正"); }
+    solved();
+    alert("🎉 ミッションクリア！（実際の遷移は行いません）");
+  };
+  body.append(
+    el('p',{},["目的：自由入力を使って、任意の外部URLへ遷移できる状況を再現する。"]),
+    el('div',{class:'row'},[input,go]),
+    el('div',{class:'sub'},["※ 安全面の都合で実遷移はしない実装です。"])
+  );
+}));
+
+/* M9: IDOR（他人のプロフィールを取得） */
+app.append(missionCard(9,"IDOR：他人の情報を見てしまう",(body, solved)=>{
+  const users = [
+    {id:1, name:"Taro", secret:"🍰好き"},
+    {id:2, name:"Hanako", secret:"📚好き"},
+    {id:3, name:"Ichiro", secret:"⚽️好き"}
+  ];
+  const login = users[0]; // Taroでログイン中
+  const input = el('input',{type:'number',min:1,placeholder:"ユーザーID（例: 2）"});
+  const btn = el('button',{class:'btn'},["取得"]);
+  const out = el('div',{class:'out'});
+  btn.onclick = ()=>{
+    const id = Number(input.value);
+    const target = users.find(u=>u.id===id);
+    if(!target) { out.textContent="該当なし"; return; }
+    // わざと脆弱：認可チェックしない
+    out.textContent = `閲覧中: ${target.name} (${target.secret})`;
+    if(id !== login.id) solved();
+  };
+  body.append(
+    el('p',{},["目的：自分以外のIDを指定して、情報が見えてしまう状態を再現。"]),
+    el('div',{class:'row'},[input,btn]),
+    out
+  );
+}));
+
+/* M10: アップロード検証不備（拡張子偽装） */
+app.append(missionCard(10,"アップロード検証：拡張子偽装を通す",(body, solved)=>{
+  const inp = el('input',{type:'file'});
+  const out = el('div',{class:'out'},"拡張子だけで判定する擬似サーバ。");
+  inp.addEventListener('change',()=>{
+    const f = inp.files?.[0];
+    if(!f) return;
+    // わざと脆弱：拡張子だけを見る
+    const ok = /\.(png|jpg|jpeg|gif)$/i.test(f.name);
+    out.textContent = ok ? `✅ 受理: ${f.name}` : `❌ 拒否: ${f.name}`;
+    if(ok && /\.php|\.exe|\.html/i.test(f.name.replace(/\.(png|jpg|jpeg|gif)$/i,''))){
+      // 例: attack.php.jpg → 受理されてしまったら成功扱い
+      solved(); alert("🎉 ミッションクリア！（偽装拡張子が通ってしまった）");
+    }
+  });
+  body.append(
+    el('p',{},["目的：", el('span',{class:'code'},["attack.php.jpg"]), " のような名前で“通過”させる体験をする（※実ファイルは送信しません）。"]),
+    inp, out
+  );
+}));
+
+/* ========= 学習のまとめ ========= */
+app.append(el('section',{class:'card'},[
+  el('header',{},[el('h2',{},["📚 学びのポイントまとめ"]), el('span',{class:'pill'},["OWASP Top 10 に接続"]) ]),
+  el('div',{class:'body cols'},[
+    el('div',{},[
+      el('p',{},["・XSS：innerHTMLに入れない。エスケープ・テンプレート・CSP。"]),
+      el('p',{},["・SQLi：文字列連結禁止、必ずプリペアドステートメント。"]),
+      el('p',{},["・CSRF：CSRFトークン、SameSite Cookie、確認ダイアログ。"]),
+      el('p',{},["・Clickjacking：", el('span',{class:'code'},["X-Frame-Options, frame-ancestors"]), "。"]),
+      el('p',{},["・Open Redirect：相対パス/許可ドメインのみに限定。"]),
+      el('p',{},["・IDOR：オブジェクト参照の前に認可チェック。"]),
+      el('p',{},["・Upload：MIME/シグネチャ検査、再エンコード、実行不可領域へ保存。"])
+    ]),
+    el('div',{},[
+      el('p',{class:'sub'},["授業での使い方："]),
+      el('p',{},["1) 10〜15分 自由攻略 → 2) 5分 ふりかえりスクショ → 3) 15分 対策コード例紹介 → 4) 5分 小テスト"]),
+      el('p',{},["先生用：進捗はバッジ表示のみ（スコアなし）。"])
+    ])
+  ])
+]));
+
+/* 初期レンダリング */
+renderHud();
+</script>
+</body>
+</html>
